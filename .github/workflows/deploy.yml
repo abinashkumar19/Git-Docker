@@ -1,94 +1,110 @@
 name: Deploy to EC2 with Docker & ECR
 
 on:
-push:
-branches:
-- main
+  push:
+    branches:
+      - main
 
 jobs:
-deploy:
-runs-on: ubuntu-latest
+  deploy:
+    runs-on: ubuntu-latest
 
-steps:
-  - name: Checkout repo
-    uses: actions/checkout@v3
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-  - name: Debug - List repo files
-    run: |
-      pwd
-      ls -R
+      - name: Debug - List repository files
+        run: |
+          echo "Current directory: $(pwd)"
+          ls -R
 
-  - name: Configure AWS credentials (for GitHub runner only)
-    uses: aws-actions/configure-aws-credentials@v4
-    with:
-      aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-      aws-region: ${{ secrets.AWS_REGION }}
+      - name: Install AWS CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y awscli
 
-  - name: Login to Amazon ECR
-    id: login-ecr
-    uses: aws-actions/amazon-ecr-login@v2
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-  - name: Ensure ECR repository exists
-    env:
-      AWS_REGION: ${{ secrets.AWS_REGION }}
-    run: |
-      aws ecr describe-repositories \
-        --repository-names myapp-repo \
-        --region $AWS_REGION || \
-      aws ecr create-repository \
-        --repository-name myapp-repo \
-        --region $AWS_REGION
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v3
 
-  - name: Build, Tag, and Push image
-    env:
-      ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-      ECR_REPOSITORY: myapp-repo
-      IMAGE_TAG: latest
-    run: |
-      docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./frontend-app
-      docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+      - name: Ensure ECR repository exists
+        env:
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}
+        run: |
+          aws ecr describe-repositories \
+            --repository-names $ECR_REPOSITORY \
+            --region $AWS_REGION || \
+          aws ecr create-repository \
+            --repository-name $ECR_REPOSITORY \
+            --region $AWS_REGION \
+            --image-scanning-configuration scanOnPush=true
 
-  - name: Deploy on EC2
-    uses: appleboy/ssh-action@v0.1.7
-    with:
-      host: ${{ secrets.EC2_HOST }}
-      username: ec2-user
-      key: ${{ secrets.EC2_KEY }}
-      script: |
-        set -e
-        echo "🔹 Updating EC2 instance..."
-        sudo yum update -y || sudo dnf update -y
+      - name: Build, Tag, and Push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}
+          IMAGE_TAG: latest
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ./frontend-app
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
-        echo "🔹 Installing Docker if missing..."
-        if ! command -v docker &> /dev/null
-        then
-          sudo yum install -y docker || sudo dnf install -y docker
-          sudo systemctl start docker
-          sudo systemctl enable docker
-          sudo usermod -aG docker ec2-user
-        fi
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            set -e
+            echo "🔹 Updating EC2 instance..."
+            if command -v yum &> /dev/null; then
+              sudo yum update -y
+            elif command -v dnf &> /dev/null; then
+              sudo dnf update -y
+            else
+              echo "❌ No supported package manager found (yum/dnf)"
+              exit 1
+            fi
 
-        echo "🔹 Installing AWS CLI if missing..."
-        if ! command -v aws &> /dev/null
-        then
-          sudo yum install -y awscli || sudo dnf install -y awscli
-        fi
+            echo "🔹 Installing Docker if missing..."
+            if ! command -v docker &> /dev/null; then
+              sudo yum install -y docker || sudo dnf install -y docker
+              sudo systemctl start docker
+              sudo systemctl enable docker
+              sudo usermod -aG docker ec2-user
+              newgrp docker || true
+            fi
 
-        echo "🔹 Logging into ECR (using IAM Role)..."
-        aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
-          | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+            echo "🔹 Installing AWS CLI if missing..."
+            if ! command -v aws &> /dev/null; then
+              sudo yum install -y awscli || sudo dnf install -y awscli
+            fi
 
-        echo "🔹 Pulling latest image..."
-        docker pull ${{ steps.login-ecr.outputs.registry }}/myapp-repo:latest
+            echo "🔹 Logging into ECR..."
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
+              | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
 
-        echo "🔹 Stopping old container..."
-        docker stop myapp || true
-        docker rm myapp || true
+            echo "🔹 Pulling latest image..."
+            docker pull ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}:latest
 
-        echo "🔹 Running new container..."
-        docker run -d --name myapp -p 80:80 ${{ steps.login-ecr.outputs.registry }}/myapp-repo:latest
+            echo "🔹 Stopping and removing old container..."
+            if docker ps -q -f name=myapp | grep .; then
+              docker stop myapp
+              docker rm myapp
+            else
+              echo "No running container named 'myapp' found."
+            fi
 
-        echo "🔹 Deployment complete."
-        docker ps -a
-```
+            echo "🔹 Running new container..."
+            docker run -d --name myapp -p 80:80 ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}:latest
+
+            echo "🔹 Deployment complete."
+            docker ps -a
