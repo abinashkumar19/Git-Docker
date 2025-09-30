@@ -2,7 +2,8 @@ name: Deploy to EC2 with Docker & ECR
 
 on:
 push:
-branches: ["main"]
+branches:
+- main
 
 jobs:
 deploy:
@@ -76,7 +77,7 @@ steps:
           sudo yum install -y awscli || sudo dnf install -y awscli
         fi
 
-        echo "🔹 Logging into ECR..."
+        echo "🔹 Logging into ECR (IAM Role on EC2 handles credentials)..."
         aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
           | sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
 
