@@ -81,4 +81,4 @@ jobs:
             docker run -d --name myapp -p 80:80 ${{ steps.login-ecr.outputs.registry }}/myapp-repo:latest
             echo "🔹 Deployment complete. Current containers:"
             docker ps -a
-            
+          
