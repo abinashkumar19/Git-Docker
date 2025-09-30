@@ -30,7 +30,6 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      # Ensure the ECR repository exists (create if missing)
       - name: Ensure ECR repository exists
         env:
           AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -58,8 +57,36 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
           script: |
+            set -e
+            echo "🔹 Updating EC2 instance..."
+            sudo apt-get update -y || sudo yum update -y
+
+            echo "🔹 Installing Docker if missing..."
+            if ! command -v docker &> /dev/null
+            then
+              sudo apt-get install -y docker.io || sudo yum install -y docker
+              sudo systemctl start docker
+              sudo systemctl enable docker
+            fi
+
+            echo "🔹 Installing AWS CLI if missing..."
+            if ! command -v aws &> /dev/null
+            then
+              sudo apt-get install -y awscli || sudo yum install -y awscli
+            fi
+
+            echo "🔹 Logging into ECR..."
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+
+            echo "🔹 Pulling latest image..."
             docker pull ${{ steps.login-ecr.outputs.registry }}/myapp-repo:latest
+
+            echo "🔹 Stopping old container (if any)..."
             docker stop myapp || true
             docker rm myapp || true
+
+            echo "🔹 Running new container..."
             docker run -d --name myapp -p 80:80 ${{ steps.login-ecr.outputs.registry }}/myapp-repo:latest
+
+            echo "🔹 Deployment complete. Current containers:"
+            docker ps -a
