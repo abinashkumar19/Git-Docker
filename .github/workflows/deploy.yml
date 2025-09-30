@@ -23,10 +23,7 @@ jobs:
           set -e
           echo "🔹 Updating package lists..."
           sudo apt-get update
-
-          echo "🔹 Installing unzip..."
           sudo apt-get install -y unzip || { echo "Failed to install unzip"; exit 1; }
-
           echo "🔹 Detecting architecture..."
           ARCH=$(uname -m)
           if [ "$ARCH" = "x86_64" ]; then
@@ -38,22 +35,17 @@ jobs:
             exit 1
           fi
           echo "Architecture: $ARCH, URL: $URL"
-
           echo "🔹 Downloading AWS CLI..."
           curl -sSL "$URL" -o "awscliv2.zip" || { echo "Failed to download AWS CLI"; exit 1; }
-
           echo "🔹 Verifying download..."
           if [ ! -f "awscliv2.zip" ]; then
             echo "❌ Download failed: awscliv2.zip not found"
             exit 1
           fi
-
           echo "🔹 Unzipping AWS CLI..."
           unzip -q awscliv2.zip || { echo "Failed to unzip awscliv2.zip"; exit 1; }
-
           echo "🔹 Installing AWS CLI..."
           sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update || { echo "Failed to install AWS CLI"; exit 1; }
-
           echo "🔹 Verifying AWS CLI installation..."
           aws --version || { echo "AWS CLI installation verification failed"; exit 1; }
 
@@ -114,8 +106,11 @@ jobs:
               sudo systemctl start docker
               sudo systemctl enable docker
               sudo usermod -aG docker ec2-user
-              newgrp docker || true
             fi
+
+            echo "🔹 Verifying Docker service and permissions..."
+            sudo systemctl is-active --quiet docker || { echo "❌ Docker service is not running"; sudo systemctl start docker; }
+            groups ec2-user | grep docker || { echo "⚠️ ec2-user not in docker group"; sudo usermod -aG docker ec2-user; }
 
             echo "🔹 Installing AWS CLI if missing..."
             if ! command -v aws &> /dev/null; then
@@ -124,21 +119,21 @@ jobs:
 
             echo "🔹 Logging into ECR..."
             aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
-              | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+              | sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
 
             echo "🔹 Pulling latest image..."
-            docker pull ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}:latest
+            sudo docker pull ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}:latest
 
             echo "🔹 Stopping and removing old container..."
-            if docker ps -q -f name=myapp | grep .; then
-              docker stop myapp
-              docker rm myapp
+            if sudo docker ps -q -f name=myapp | grep .; then
+              sudo docker stop myapp
+              sudo docker rm myapp
             else
               echo "No running container named 'myapp' found."
             fi
 
             echo "🔹 Running new container..."
-            docker run -d --name myapp -p 80:80 ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}:latest
+            sudo docker run -d --name myapp -p 80:80 ${{ steps.login-ecr.outputs.registry }}/${{ secrets.ECR_REPOSITORY_NAME || 'myapp-repo' }}:latest
 
             echo "🔹 Deployment complete."
-            docker ps -a
+            sudo docker ps -a
