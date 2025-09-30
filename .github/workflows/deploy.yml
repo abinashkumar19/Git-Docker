@@ -76,7 +76,8 @@ jobs:
             fi
 
             echo "🔹 Logging into ECR..."
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} \
+              | docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
 
             echo "🔹 Pulling latest image..."
             docker pull ${{ steps.login-ecr.outputs.registry }}/myapp-repo:latest
