@@ -20,15 +20,42 @@ jobs:
 
       - name: Install AWS CLI
         run: |
-          # Install dependencies
+          set -e
+          echo "🔹 Updating package lists..."
           sudo apt-get update
-          sudo apt-get install -y unzip
-          # Download and install AWS CLI v2
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip awscliv2.zip
-          sudo ./aws/install
-          # Verify installation
-          aws --version
+
+          echo "🔹 Installing unzip..."
+          sudo apt-get install -y unzip || { echo "Failed to install unzip"; exit 1; }
+
+          echo "🔹 Detecting architecture..."
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            URL="https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip"
+          elif [ "$ARCH" = "aarch64" ]; then
+            URL="https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip"
+          else
+            echo "❌ Unsupported architecture: $ARCH"
+            exit 1
+          fi
+          echo "Architecture: $ARCH, URL: $URL"
+
+          echo "🔹 Downloading AWS CLI..."
+          curl -sSL "$URL" -o "awscliv2.zip" || { echo "Failed to download AWS CLI"; exit 1; }
+
+          echo "🔹 Verifying download..."
+          if [ ! -f "awscliv2.zip" ]; then
+            echo "❌ Download failed: awscliv2.zip not found"
+            exit 1
+          fi
+
+          echo "🔹 Unzipping AWS CLI..."
+          unzip -q awscliv2.zip || { echo "Failed to unzip awscliv2.zip"; exit 1; }
+
+          echo "🔹 Installing AWS CLI..."
+          sudo ./aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli --update || { echo "Failed to install AWS CLI"; exit 1; }
+
+          echo "🔹 Verifying AWS CLI installation..."
+          aws --version || { echo "AWS CLI installation verification failed"; exit 1; }
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
